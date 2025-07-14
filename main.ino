@@ -4,6 +4,8 @@
 #define U6_ADDR 0x2C
 #define U7_ADDR 0x2D
 
+const int throttleMax = 818;
+
 // Button pins
 const int buttonLeft = 2;
 const int buttonRight = 4;
@@ -62,7 +64,7 @@ void stopMotors() {
 
 void loop() {
   int throttle = analogRead(A0);
-  byte digipotValue = map(throttle, 0, 1023, 0, 255);
+  byte digipotValue = map(throttle, 0, throttleMax, 0, 255);
   setDigipot(U6_ADDR, digipotValue);
   setDigipot(U7_ADDR, digipotValue);
 
