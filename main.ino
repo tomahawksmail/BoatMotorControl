@@ -4,6 +4,7 @@
 #define U6_ADDR 0x2C
 #define U7_ADDR 0x2D
 
+# check max via monitor
 const int throttleMax = 818;
 
 // Button pins
