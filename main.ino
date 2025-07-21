@@ -21,7 +21,7 @@ const int led2 = 7;
 const int led3 = 12;
 
 // Timings
-const unsigned long motor1_time = 3000;  // t1
+const unsigned long motor1_time = 1000;  // t1
 const unsigned long motor2_time = 5000;  // t2
 const unsigned long wait_before_reverse = 1000;
 
