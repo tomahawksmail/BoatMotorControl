@@ -4,47 +4,67 @@
 #define U6_ADDR 0x2C
 #define U7_ADDR 0x2D
 
-# check max via monitor
-const int throttleMax = 818;
-
-// Button pins
+// Pins
 const int buttonLeft = 2;
 const int buttonRight = 4;
 
-// BTS7960 pins
 const int motor1_LPWM = 5;
 const int motor1_RPWM = 3;
 const int motor2_LPWM = 9;
 const int motor2_RPWM = 6;
-const int motorEnable = 11;
 
-// Run times
-unsigned long motor1_time = 3000;
-unsigned long motor2_time = 5000;
+const int motor1Enable = 10;
+const int motor2Enable = 11;
 
-enum State {IDLE, RUNNING_LEFT, RUNNING_RIGHT, PAUSED};
-State state = IDLE;
+const int led1 = 8;
+const int led2 = 7;
+const int led3 = 12;
 
-bool lastLeft = false;
-bool lastRight = false;
+// Timings
+const unsigned long motor1_time = 3000;  // t1
+const unsigned long motor2_time = 5000;  // t2
+const unsigned long wait_before_reverse = 1000;
 
-// Which motor we're running now (1 or 2)
-int currentMotor = 0;
-unsigned long motorStartTime = 0;
-unsigned long motorRemainingTime = 0;
+// Hall Sensor
+const int hallPin = A0;
+const int hallThreshold = 700;
 
-// PWM values
-const int pwmValue = 200;
+// LED blink
+unsigned long led1_lastToggle = 0;
+bool led1_state = false;
+
+enum Direction { DIR_LEFT, DIR_RIGHT };
+enum Step {
+  STEP_IDLE,
+  STEP_M1_FORWARD,
+  STEP_M2,
+  STEP_M1_BACK,
+  STEP_WAIT_BEFORE_REVERSE,
+  STEP_REVERSE_M2,
+  STEP_REVERSE_M1
+};
+
+Step step = STEP_IDLE;
+Direction direction;
+unsigned long stepStart = 0;
+bool interrupted = false;
 
 void setup() {
   pinMode(buttonLeft, INPUT_PULLUP);
   pinMode(buttonRight, INPUT_PULLUP);
+
   pinMode(motor1_LPWM, OUTPUT);
   pinMode(motor1_RPWM, OUTPUT);
   pinMode(motor2_LPWM, OUTPUT);
   pinMode(motor2_RPWM, OUTPUT);
-  pinMode(motorEnable, OUTPUT);
-  digitalWrite(motorEnable, HIGH);
+  pinMode(motor1Enable, OUTPUT);
+  pinMode(motor2Enable, OUTPUT);
+  digitalWrite(motor1Enable, HIGH);
+  digitalWrite(motor2Enable, HIGH);
+
+  pinMode(led1, OUTPUT);
+  pinMode(led2, OUTPUT);
+  pinMode(led3, OUTPUT);
 
   Wire.begin();
   Serial.begin(9600);
@@ -56,117 +76,138 @@ void setDigipot(byte addr, byte value) {
   Wire.endTransmission();
 }
 
+void updateDigipotFromHall() {
+  int hallValue = analogRead(hallPin);
+  if (hallValue > hallThreshold) {
+    setDigipot(U6_ADDR, 255);
+    setDigipot(U7_ADDR, 255);
+  } else {
+    setDigipot(U6_ADDR, 0);
+    setDigipot(U7_ADDR, 0);
+  }
+}
+
 void stopMotors() {
   analogWrite(motor1_LPWM, 0);
   analogWrite(motor1_RPWM, 0);
   analogWrite(motor2_LPWM, 0);
   analogWrite(motor2_RPWM, 0);
+  digitalWrite(led2, LOW);
+  digitalWrite(led3, LOW);
+}
+
+void runMotor1(bool forward) {
+  digitalWrite(led2, HIGH);
+  analogWrite(motor1_LPWM, forward ? 200 : 0);
+  analogWrite(motor1_RPWM, forward ? 0 : 200);
+  analogWrite(motor2_LPWM, 0);
+  analogWrite(motor2_RPWM, 0);
+  digitalWrite(led3, LOW);
+}
+
+void runMotor2(bool forward) {
+  digitalWrite(led3, HIGH);
+  analogWrite(motor2_LPWM, forward ? 200 : 0);
+  analogWrite(motor2_RPWM, forward ? 0 : 200);
+  analogWrite(motor1_LPWM, 0);
+  analogWrite(motor1_RPWM, 0);
+  digitalWrite(led2, LOW);
 }
 
 void loop() {
-  int throttle = analogRead(A0);
-  byte digipotValue = map(throttle, 0, throttleMax, 0, 255);
-  setDigipot(U6_ADDR, digipotValue);
-  setDigipot(U7_ADDR, digipotValue);
+  updateDigipotFromHall();
 
-  bool leftNow = digitalRead(buttonLeft) == LOW;
-  bool rightNow = digitalRead(buttonRight) == LOW;
-
-  // detect rising edge (press → release)
-  bool leftTapped = (!lastLeft && leftNow == false && digitalRead(buttonLeft) == HIGH);
-  bool rightTapped = (!lastRight && rightNow == false && digitalRead(buttonRight) == HIGH);
-
-  lastLeft = leftNow;
-  lastRight = rightNow;
-
-  // Handle taps
-  if (leftTapped || rightTapped) {
-    if (state == IDLE) {
-      // start moving in tapped direction
-      state = leftTapped ? RUNNING_LEFT : RUNNING_RIGHT;
-      currentMotor = 1;
-      motorRemainingTime = motor1_time;
-      motorStartTime = millis();
-      Serial.println("Started");
-    }
-    else if (state == RUNNING_LEFT || state == RUNNING_RIGHT) {
-      // stop immediately
-      stopMotors();
-      motorRemainingTime -= millis() - motorStartTime;
-      if (motorRemainingTime < 0) motorRemainingTime = 0;
-      state = PAUSED;
-      Serial.println("Paused");
-    }
-    else if (state == PAUSED) {
-      // resume or reverse
-      if ((leftTapped && state == PAUSED && lastDirection() == RUNNING_LEFT) ||
-          (rightTapped && state == PAUSED && lastDirection() == RUNNING_RIGHT)) {
-        // same direction: resume
-        motorStartTime = millis();
-        state = lastDirection();
-        Serial.println("Resumed");
-      } else {
-        // other direction: restart from start
-        state = leftTapped ? RUNNING_LEFT : RUNNING_RIGHT;
-        currentMotor = 1;
-        motorRemainingTime = motor1_time;
-        motorStartTime = millis();
-        Serial.println("Restarted other side");
-      }
-    }
+  // Blink LED1 every 1s
+  if (millis() - led1_lastToggle >= 500) {
+    led1_state = !led1_state;
+    digitalWrite(led1, led1_state);
+    led1_lastToggle = millis();
   }
 
-  // Run motors if needed
-  if (state == RUNNING_LEFT || state == RUNNING_RIGHT) {
-    unsigned long elapsed = millis() - motorStartTime;
-    if (elapsed >= motorRemainingTime) {
-      stopMotors();
-      if (currentMotor == 1) {
-        // move to motor2
-        currentMotor = 2;
-        motorRemainingTime = motor2_time;
-        motorStartTime = millis();
-      } else {
-        // finished
-        state = IDLE;
-        Serial.println("Finished");
+  bool leftPressed = digitalRead(buttonLeft) == LOW;
+  bool rightPressed = digitalRead(buttonRight) == LOW;
+  bool isMoving = (step == STEP_M1_FORWARD || step == STEP_M2 || step == STEP_M1_BACK);
+
+  // Emergency interrupt
+  if (isMoving && (leftPressed || rightPressed) && !interrupted) {
+    Serial.println("Interrupted! Stopping...");
+    stopMotors();
+    interrupted = true;
+    step = STEP_WAIT_BEFORE_REVERSE;
+    stepStart = millis();
+    return;
+  }
+
+  // New command
+  if (step == STEP_IDLE && (leftPressed || rightPressed)) {
+    direction = leftPressed ? DIR_LEFT : DIR_RIGHT;
+    step = STEP_M1_FORWARD;
+    stepStart = millis();
+    runMotor1(true);
+    Serial.println(direction == DIR_LEFT ? "Left: M1 forward" : "Right: M1 forward");
+  }
+
+  // Step transitions
+  unsigned long now = millis();
+  switch (step) {
+    case STEP_M1_FORWARD:
+      if (now - stepStart >= motor1_time) {
+        step = STEP_M2;
+        stepStart = now;
+        runMotor2(direction == DIR_LEFT);
+        Serial.println("M2 running");
       }
-    } else {
-      // run current motor
-      runCurrentMotor(state == RUNNING_LEFT, currentMotor);
-    }
+      break;
+
+    case STEP_M2:
+      if (now - stepStart >= motor2_time) {
+        step = STEP_M1_BACK;
+        stepStart = now;
+        runMotor1(false);
+        Serial.println("M1 back");
+      }
+      break;
+
+    case STEP_M1_BACK:
+      if (now - stepStart >= motor1_time) {
+        step = STEP_IDLE;
+        stopMotors();
+        interrupted = false;
+        Serial.println("Done");
+      }
+      break;
+
+    case STEP_WAIT_BEFORE_REVERSE:
+      if (now - stepStart >= wait_before_reverse) {
+        // Reverse order
+        step = STEP_REVERSE_M2;
+        stepStart = now;
+        runMotor2(direction == DIR_LEFT ? false : true); // reverse direction
+        Serial.println("Reverse M2");
+      }
+      break;
+
+    case STEP_REVERSE_M2:
+      if (now - stepStart >= motor2_time) {
+        step = STEP_REVERSE_M1;
+        stepStart = now;
+        runMotor1(false); // always back
+        Serial.println("Reverse M1");
+      }
+      break;
+
+    case STEP_REVERSE_M1:
+      if (now - stepStart >= motor1_time) {
+        stopMotors();
+        step = STEP_IDLE;
+        interrupted = false;
+        Serial.println("Returned to start");
+      }
+      break;
+
+    default:
+      break;
   }
 
   delay(10);
-}
-
-// helper: which direction we were running before pause
-State lastDirection() {
-  static State dir = RUNNING_LEFT;
-  if (state == RUNNING_LEFT || state == RUNNING_RIGHT) dir = state;
-  return dir;
-}
-
-void runCurrentMotor(bool leftDirection, int motorNumber) {
-  if (motorNumber == 1) {
-    if (leftDirection) {
-      analogWrite(motor1_LPWM, pwmValue);
-      analogWrite(motor1_RPWM, 0);
-    } else {
-      analogWrite(motor1_LPWM, 0);
-      analogWrite(motor1_RPWM, pwmValue);
-    }
-    analogWrite(motor2_LPWM, 0);
-    analogWrite(motor2_RPWM, 0);
-  } else {
-    if (leftDirection) {
-      analogWrite(motor2_LPWM, pwmValue);
-      analogWrite(motor2_RPWM, 0);
-    } else {
-      analogWrite(motor2_LPWM, 0);
-      analogWrite(motor2_RPWM, pwmValue);
-    }
-    analogWrite(motor1_LPWM, 0);
-    analogWrite(motor1_RPWM, 0);
-  }
 }
