@@ -1,52 +1,54 @@
 #include <Wire.h>
 
-// AD5171 I2C addresses
+// I2C Digital Pot Addresses (dummy, adapt as needed)
 #define U6_ADDR 0x2C
 #define U7_ADDR 0x2D
 
-// Pins
+// Input Buttons
 const int buttonLeft = 2;
 const int buttonRight = 4;
 
+// Motor Pins
 const int motor1_LPWM = 5;
 const int motor1_RPWM = 3;
 const int motor2_LPWM = 9;
 const int motor2_RPWM = 6;
-
 const int motor1Enable = 10;
 const int motor2Enable = 11;
 
-const int led1 = 8;
+// LEDs
+const int led1 = 8;  // heartbeat
 const int led2 = 7;
 const int led3 = 12;
 
-// Timings
-const unsigned long motor1_time = 1000;  // t1
-const unsigned long motor2_time = 5000;  // t2
-const unsigned long wait_before_reverse = 1000;
-
-// Hall Sensor
+// Hall sensor
 const int hallPin = A0;
 const int hallThreshold = 700;
 
-// LED blink
-unsigned long led1_lastToggle = 0;
-bool led1_state = false;
+// Timing
+const unsigned long motor1_time = 1000;
+const unsigned long motor2_time = 5000;
+const unsigned long debounce = 50;
 
-enum Direction { DIR_LEFT, DIR_RIGHT };
+unsigned long stepStart = 0;
+unsigned long lastButtonTime = 0;
+
+bool led1_state = false;
+unsigned long led1_lastToggle = 0;
+
+enum Direction { DIR_NONE, DIR_LEFT, DIR_RIGHT };
 enum Step {
   STEP_IDLE,
-  STEP_M1_FORWARD,
+  STEP_M1_LEFT,
   STEP_M2,
-  STEP_M1_BACK,
-  STEP_WAIT_BEFORE_REVERSE,
-  STEP_REVERSE_M2,
-  STEP_REVERSE_M1
+  STEP_M1_RIGHT,
+  STEP_INTERRUPTED
 };
 
+Direction direction = DIR_NONE;
+Direction lastCompletedDirection = DIR_NONE;
 Step step = STEP_IDLE;
-Direction direction;
-unsigned long stepStart = 0;
+Step resumeStep = STEP_IDLE;
 bool interrupted = false;
 
 void setup() {
@@ -68,23 +70,7 @@ void setup() {
 
   Wire.begin();
   Serial.begin(9600);
-}
-
-void setDigipot(byte addr, byte value) {
-  Wire.beginTransmission(addr);
-  Wire.write(value);
-  Wire.endTransmission();
-}
-
-void updateDigipotFromHall() {
-  int hallValue = analogRead(hallPin);
-  if (hallValue > hallThreshold) {
-    setDigipot(U6_ADDR, 255);
-    setDigipot(U7_ADDR, 255);
-  } else {
-    setDigipot(U6_ADDR, 0);
-    setDigipot(U7_ADDR, 0);
-  }
+  stopMotors();
 }
 
 void stopMotors() {
@@ -96,118 +82,133 @@ void stopMotors() {
   digitalWrite(led3, LOW);
 }
 
-void runMotor1(bool forward) {
+void runMotor1(bool left) {
   digitalWrite(led2, HIGH);
-  analogWrite(motor1_LPWM, forward ? 200 : 0);
-  analogWrite(motor1_RPWM, forward ? 0 : 200);
-  analogWrite(motor2_LPWM, 0);
-  analogWrite(motor2_RPWM, 0);
-  digitalWrite(led3, LOW);
+  analogWrite(motor1_LPWM, left ? 200 : 0);
+  analogWrite(motor1_RPWM, left ? 0 : 200);
 }
 
-void runMotor2(bool forward) {
+void runMotor2(bool left) {
   digitalWrite(led3, HIGH);
-  analogWrite(motor2_LPWM, forward ? 200 : 0);
-  analogWrite(motor2_RPWM, forward ? 0 : 200);
-  analogWrite(motor1_LPWM, 0);
-  analogWrite(motor1_RPWM, 0);
-  digitalWrite(led2, LOW);
+  analogWrite(motor2_LPWM, left ? 200 : 0);
+  analogWrite(motor2_RPWM, left ? 0 : 200);
+}
+
+void updateDigipotFromHall() {
+  int hallValue = analogRead(hallPin);
+  byte value = (hallValue > hallThreshold) ? 255 : 0;
+  Wire.beginTransmission(U6_ADDR);
+  Wire.write(value);
+  Wire.endTransmission();
+  Wire.beginTransmission(U7_ADDR);
+  Wire.write(value);
+  Wire.endTransmission();
 }
 
 void loop() {
   updateDigipotFromHall();
 
-  // Blink LED1 every 1s
+  // Heartbeat LED
   if (millis() - led1_lastToggle >= 500) {
     led1_state = !led1_state;
     digitalWrite(led1, led1_state);
     led1_lastToggle = millis();
   }
 
-  bool leftPressed = digitalRead(buttonLeft) == LOW;
-  bool rightPressed = digitalRead(buttonRight) == LOW;
-  bool isMoving = (step == STEP_M1_FORWARD || step == STEP_M2 || step == STEP_M1_BACK);
+  // Read buttons
+  bool leftNow = digitalRead(buttonLeft) == LOW;
+  bool rightNow = digitalRead(buttonRight) == LOW;
+  static bool leftPrev = false;
+  static bool rightPrev = false;
+  bool leftPressed = leftNow && !leftPrev;
+  bool rightPressed = rightNow && !rightPrev;
+  leftPrev = leftNow;
+  rightPrev = rightNow;
 
-  // Emergency interrupt
-  if (isMoving && (leftPressed || rightPressed) && !interrupted) {
-    Serial.println("Interrupted! Stopping...");
-    stopMotors();
-    interrupted = true;
-    step = STEP_WAIT_BEFORE_REVERSE;
-    stepStart = millis();
+  unsigned long now = millis();
+
+  // Emergency Stop if already running
+  if (step != STEP_IDLE && step != STEP_INTERRUPTED && (leftPressed || rightPressed)) {
+    if (now - lastButtonTime > 500) {
+      Serial.println("== EMERGENCY STOP ==");
+      interrupted = true;
+      resumeStep = step;
+      stopMotors();
+      step = STEP_INTERRUPTED;
+      lastButtonTime = now;
+    }
     return;
   }
 
-  // New command
-  if (step == STEP_IDLE && (leftPressed || rightPressed)) {
-    direction = leftPressed ? DIR_LEFT : DIR_RIGHT;
-    step = STEP_M1_FORWARD;
-    stepStart = millis();
-    runMotor1(true);
-    Serial.println(direction == DIR_LEFT ? "Left: M1 forward" : "Right: M1 forward");
+  // Resume or start new sequence
+  if ((step == STEP_IDLE || step == STEP_INTERRUPTED) && (leftPressed || rightPressed)) {
+    if (now - lastButtonTime > 500) {
+      Direction newDir = leftPressed ? DIR_LEFT : DIR_RIGHT;
+
+      // If completed already and not interrupted → do nothing
+      if (!interrupted && step == STEP_IDLE && newDir == lastCompletedDirection) {
+        return;
+      }
+
+      direction = newDir;
+      digitalWrite(led2, LOW);
+      digitalWrite(led3, LOW);
+      stepStart = now;
+
+      if (interrupted && direction == direction) {
+        Serial.println("== RESUMING MOVEMENT ==");
+        step = resumeStep;
+      } else {
+        Serial.print("== NEW MOVEMENT: ");
+        Serial.println(direction == DIR_LEFT ? "LEFT" : "RIGHT");
+        step = STEP_M1_LEFT;
+      }
+
+      interrupted = false;
+      lastButtonTime = now;
+    }
+    return;
   }
 
-  // Step transitions
-  unsigned long now = millis();
+  // Step sequencing
   switch (step) {
-    case STEP_M1_FORWARD:
+    case STEP_M1_LEFT:
+      runMotor1(true);
       if (now - stepStart >= motor1_time) {
         step = STEP_M2;
         stepStart = now;
-        runMotor2(direction == DIR_LEFT);
-        Serial.println("M2 running");
+        stopMotors();
+        Serial.println("STEP: M1 Left done → M2 Start");
       }
       break;
 
     case STEP_M2:
+      runMotor2(direction == DIR_LEFT);
       if (now - stepStart >= motor2_time) {
-        step = STEP_M1_BACK;
+        step = STEP_M1_RIGHT;
         stepStart = now;
-        runMotor1(false);
-        Serial.println("M1 back");
+        stopMotors();
+        Serial.println("STEP: M2 done → M1 Right");
       }
       break;
 
-    case STEP_M1_BACK:
+    case STEP_M1_RIGHT:
+      runMotor1(false);
       if (now - stepStart >= motor1_time) {
         step = STEP_IDLE;
+        lastCompletedDirection = direction;
         stopMotors();
-        interrupted = false;
-        Serial.println("Done");
+        Serial.println("STEP: M1 Right done → Finished");
       }
       break;
 
-    case STEP_WAIT_BEFORE_REVERSE:
-      if (now - stepStart >= wait_before_reverse) {
-        // Reverse order
-        step = STEP_REVERSE_M2;
-        stepStart = now;
-        runMotor2(direction == DIR_LEFT ? false : true); // reverse direction
-        Serial.println("Reverse M2");
-      }
-      break;
-
-    case STEP_REVERSE_M2:
-      if (now - stepStart >= motor2_time) {
-        step = STEP_REVERSE_M1;
-        stepStart = now;
-        runMotor1(false); // always back
-        Serial.println("Reverse M1");
-      }
-      break;
-
-    case STEP_REVERSE_M1:
-      if (now - stepStart >= motor1_time) {
-        stopMotors();
-        step = STEP_IDLE;
-        interrupted = false;
-        Serial.println("Returned to start");
-      }
+    case STEP_INTERRUPTED:
+      // Wait for new button press
       break;
 
     default:
       break;
   }
 
-  delay(10);
+  delay(5);
 }
