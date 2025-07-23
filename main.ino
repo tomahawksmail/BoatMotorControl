@@ -28,7 +28,7 @@ const int hallThreshold = 700;
 // Timing
 const unsigned long motor1_time = 1000;
 const unsigned long motor2_time = 5000;
-const unsigned long debounce = 50;
+const unsigned long debounce = 150;
 
 unsigned long stepStart = 0;
 unsigned long lastButtonTime = 0;
