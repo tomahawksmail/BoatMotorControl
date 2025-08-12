@@ -17,9 +17,9 @@ const int motor1Enable = 10;
 const int motor2Enable = 11;
 
 // LEDs
-const int led1 = 8;  // heartbeat
-const int led2 = 7;
-const int led3 = 12;
+const int led1 = 8;  // StandBy
+const int led2 = 7;  // RUN-1
+const int led3 = 12; // RUN-2
 
 // Hall sensor
 const int hallPin = A0;
