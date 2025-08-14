@@ -1,0 +1,61 @@
+#include <Wire.h>
+
+const uint8_t SDA_PIN = A4; // Nano SDA
+const uint8_t SCL_PIN = A5; // Nano SCL
+
+void i2cBusRecover() {
+  pinMode(SDA_PIN, INPUT_PULLUP);
+  pinMode(SCL_PIN, INPUT_PULLUP);
+  delay(5);
+
+  // If SDA stuck low, clock SCL ~9 times to free it
+  if (digitalRead(SDA_PIN) == LOW) {
+    pinMode(SCL_PIN, OUTPUT);
+    for (int i = 0; i < 10 && digitalRead(SDA_PIN) == LOW; i++) {
+      digitalWrite(SCL_PIN, HIGH);
+      delayMicroseconds(50);
+      digitalWrite(SCL_PIN, LOW);
+      delayMicroseconds(50);
+    }
+    pinMode(SCL_PIN, INPUT_PULLUP);
+    delay(2);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial) {}
+  Serial.println("\nI2C bus recovery + full scan...");
+  
+  i2cBusRecover();
+
+  Wire.begin();              // Nano: A4 SDA, A5 SCL
+  Wire.setClock(100000);     // start at 100 kHz
+}
+
+void loop() {
+  byte error, address;
+  int found = 0;
+
+  for (address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+    if (error == 0) {
+      Serial.print("Found device at 0x");
+      if (address < 16) Serial.print("0");
+      Serial.println(address, HEX);
+      found++;
+    } else if (error == 4) {
+      Serial.print("Unknown error at 0x");
+      if (address < 16) Serial.print("0");
+      Serial.println(address, HEX);
+    }
+  }
+
+  if (found == 0) {
+    Serial.println("No I2C devices found.");
+    Serial.println("Tips: check VCC/GND, SDA->A4, SCL->A5, pull-ups, voltage level, and AD pins.");
+  }
+  Serial.println("---------------------------");
+  delay(2000);
+}
