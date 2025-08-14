@@ -114,7 +114,7 @@ void loop() {
   // Heartbeat LED
   switch (led1_phase) {
     case 0: // LED ON (first blink)
-      if (now - led1_lastToggle >= 150) {
+      if (now - led1_lastToggle >= 100) {
         digitalWrite(led1, LOW);
         led1_phase = 1;
         led1_lastToggle = now;
@@ -131,7 +131,7 @@ void loop() {
       break;
 
     case 2: // LED ON (second blink)
-      if (now - led1_lastToggle >= 150) {
+      if (now - led1_lastToggle >= 100) {
         digitalWrite(led1, LOW);
         led1_phase = 3;
         led1_lastToggle = now;
