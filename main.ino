@@ -17,9 +17,9 @@ const int motor1Enable = 10;
 const int motor2Enable = 11;
 
 // LEDs
-const int led1 = 7;  // StandBy
+const int led1 = 12;  // StandBy
 const int led2 = 8;  // RUN-1
-const int led3 = 12; // RUN-2
+const int led3 = 7; // RUN-2
 
 // Hall sensor
 const int hallPin = A0;
@@ -33,8 +33,9 @@ const unsigned long debounce = 150;
 unsigned long stepStart = 0;
 unsigned long lastButtonTime = 0;
 
-bool led1_state = false;
+bool led1_state = LOW;
 unsigned long led1_lastToggle = 0;
+int led1_phase = 0;
 
 enum Direction { DIR_NONE, DIR_LEFT, DIR_RIGHT };
 enum Step {
@@ -106,13 +107,45 @@ void updateDigipotFromHall() {
 }
 
 void loop() {
+  unsigned long now = millis();
+
   updateDigipotFromHall();
 
   // Heartbeat LED
-  if (millis() - led1_lastToggle >= 500) {
-    led1_state = !led1_state;
-    digitalWrite(led1, led1_state);
-    led1_lastToggle = millis();
+  switch (led1_phase) {
+    case 0: // LED ON (first blink)
+      if (now - led1_lastToggle >= 150) {
+        digitalWrite(led1, LOW);
+        led1_phase = 1;
+        led1_lastToggle = now;
+      } else {
+        digitalWrite(led1, HIGH);
+      }
+      break;
+
+    case 1: // short OFF gap
+      if (now - led1_lastToggle >= 250) {
+        led1_phase = 2;
+        led1_lastToggle = now;
+      }
+      break;
+
+    case 2: // LED ON (second blink)
+      if (now - led1_lastToggle >= 150) {
+        digitalWrite(led1, LOW);
+        led1_phase = 3;
+        led1_lastToggle = now;
+      } else {
+        digitalWrite(led1, HIGH);
+      }
+      break;
+
+    case 3: // long OFF pause
+      if (now - led1_lastToggle >= 3000) {
+        led1_phase = 0;  // restart sequence
+        led1_lastToggle = now;
+      }
+      break;
   }
 
   // Read buttons
@@ -125,7 +158,7 @@ void loop() {
   leftPrev = leftNow;
   rightPrev = rightNow;
 
-  unsigned long now = millis();
+
 
   // Emergency Stop if already running
   if (step != STEP_IDLE && step != STEP_INTERRUPTED && (leftPressed || rightPressed)) {
