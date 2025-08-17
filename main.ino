@@ -9,11 +9,14 @@ const int buttonLeft = 2;
 const int buttonRight = 4;
 
 // Motor Pins
+// SMALL
 const int motor1_LPWM = 5;
 const int motor1_RPWM = 3;
+const int motor1Enable = 10;
+
+// BIG
 const int motor2_LPWM = 9;
 const int motor2_RPWM = 6;
-const int motor1Enable = 10;
 const int motor2Enable = 11;
 
 // LEDs
@@ -26,7 +29,7 @@ const int hallPin = A0;
 const int hallThreshold = 700;
 
 // Timing
-const unsigned long motor1_time = 1000;
+const unsigned long motor1_time = 1500;
 const unsigned long motor2_time = 5000;
 const unsigned long debounce = 150;
 
@@ -70,7 +73,7 @@ void setup() {
   pinMode(led3, OUTPUT);
 
   Wire.begin();
-  Serial.begin(9600);
+  Serial.begin(115200);
   stopMotors();
 }
 
@@ -97,6 +100,10 @@ void runMotor2(bool left) {
 
 void updateDigipotFromHall() {
   int hallValue = analogRead(hallPin);
+  hallValue = map(hallValue, 170, 865, 0, 170);
+
+  Serial.println(hallValue);
+
   byte value = (hallValue > hallThreshold) ? 255 : 0;
   Wire.beginTransmission(U6_ADDR);
   Wire.write(value);
@@ -104,6 +111,7 @@ void updateDigipotFromHall() {
   Wire.beginTransmission(U7_ADDR);
   Wire.write(value);
   Wire.endTransmission();
+  
 }
 
 void loop() {
